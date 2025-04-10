@@ -1,0 +1,7 @@
+__pycache__/
+.idea/
+.vscode/
+*.pyc
+*.log
+data/  # If you have large data files
+venv/  # Ignore the virtual environment
