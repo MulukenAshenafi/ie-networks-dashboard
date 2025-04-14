@@ -267,7 +267,7 @@ def calculate_kpis(df):
 def main():
     # --- IE Networks Logo ---
     st.image(
-        "https://drive.google.com/file/d/1pXOacEUJBLBZ9H-vRlGcj4DWtgzGoqwi/view?usp=sharing",
+        "https://asset.cloudinary.com/djftqvask/f835addefe28e317faa68714ed30d080",
         width=200,
     )  # Replace with your logo URL
 
