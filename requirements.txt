@@ -3,5 +3,3 @@ pandas==2.1.0
 plotly==6.0.1
 requests==2.31.0
 aiohttp==3.9.0
-narwhals==1.34.1
-packaging==24.2
