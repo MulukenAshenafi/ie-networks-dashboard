@@ -440,10 +440,14 @@ def calculate_kpis(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
 def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
     """Render the Streamlit dashboard."""
-    st.image(
-        "https://asset.cloudinary.com/djftqvask/f835addefe28e317faa68714ed30d080",
-        width=200,
-    )
+    try:
+        st.image(
+            os.path.join(BASE_DIR, 'assets', 'ie_networks_logo.png'),
+            width=200,
+        )
+    except FileNotFoundError:
+        logger.error("Logo file not found at assets/ie_networks_logo.png")
+        st.warning("Logo not found. Please ensure 'ie_networks_logo.png' is in the assets folder.")
     st.title("IE Networks CEO Dashboard")
 
     # Filters
