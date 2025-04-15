@@ -40,6 +40,9 @@ ACCOUNT_CATEGORY_MAPPING = {
     '61000025001': 'Operating Expenses',
     '61000026001': 'Operating Expenses',
     '61000027001': 'Operating Expenses',
+    # Add Revenue and COGS mappings here after obtaining from Sage
+    # Example: '51000001001': 'Revenue',
+    #          '52000002001': 'Cost of Goods Sold',
 }
 
 # --- Utility Functions ---
@@ -183,7 +186,7 @@ def process_data(all_batches: List[Dict]) -> Optional[pd.DataFrame]:
 
         if missing_mappings:
             logger.warning(f"Missing account mappings for: {missing_mappings}")
-            st.warning(f"Some accounts are uncategorized: {len(missing_mappings)} unique accounts.")
+            st.warning(f"Some accounts are uncategorized: {len(missing_mappings)} unique accounts. Check app.log for details.")
 
         df = pd.DataFrame(processed_transactions)
 
@@ -218,7 +221,13 @@ def calculate_kpis(df: pd.DataFrame) -> Optional[pd.DataFrame]:
         return None
 
     with st.spinner("Calculating KPIs..."):
-        monthly_trends = pd.DataFrame()
+        # Initialize monthly_trends with MonthYear from all transactions
+        if 'MonthYear' in df.columns:
+            monthly_trends = pd.DataFrame(df['MonthYear'].unique(), columns=['MonthYear'])
+        else:
+            logger.error("MonthYear column missing in DataFrame")
+            st.error("Cannot calculate KPIs: No valid date data.")
+            return None
 
         # Revenue Trends
         revenue_accounts = df[df['AccountCategory'] == 'Revenue']
@@ -228,27 +237,42 @@ def calculate_kpis(df: pd.DataFrame) -> Optional[pd.DataFrame]:
             monthly_revenue['Revenue_Growth_Rate'] = (
                 (monthly_revenue['Revenue'] - monthly_revenue['Revenue_Lag']) / monthly_revenue['Revenue_Lag'] * 100
             ).fillna(0).replace([float('inf'), -float('inf')], 0)
-            monthly_trends = monthly_revenue
+            monthly_trends = monthly_trends.merge(monthly_revenue, on='MonthYear', how='outer')
+        else:
+            logger.warning("No Revenue accounts found")
+            monthly_trends['Revenue'] = 0
+            monthly_trends['Revenue_Growth_Rate'] = 0
 
         # COGS Trends
         cogs_accounts = df[df['AccountCategory'] == 'Cost of Goods Sold']
         if not cogs_accounts.empty:
             monthly_cogs = cogs_accounts.groupby('MonthYear')['Amount'].sum().reset_index(name='COGS')
-            monthly_trends = monthly_trends.merge(monthly_cogs, on='MonthYear', how='outer').fillna(0)
-            monthly_trends['COGS_Pct_of_Revenue'] = (
-                (monthly_trends['COGS'].abs() / monthly_trends['Revenue'].abs()) * 100
-            ).fillna(0).replace([float('inf'), -float('inf')], 0)
+            monthly_trends = monthly_trends.merge(monthly_cogs, on='MonthYear', how='outer')
+        else:
+            logger.warning("No Cost of Goods Sold accounts found")
+            monthly_trends['COGS'] = 0
 
         # Operating Expenses
         op_exp_accounts = df[df['AccountCategory'] == 'Operating Expenses']
         if not op_exp_accounts.empty:
             monthly_op_exp = op_exp_accounts.groupby('MonthYear')['Amount'].sum().reset_index(name='Operating_Expenses')
-            monthly_trends = monthly_trends.merge(monthly_op_exp, on='MonthYear', how='outer').fillna(0)
-            monthly_trends['Operating_Expenses_Pct_of_Revenue'] = (
-                (monthly_trends['Operating_Expenses'].abs() / monthly_trends['Revenue'].abs()) * 100
-            ).fillna(0).replace([float('inf'), -float('inf')], 0)
+            monthly_trends = monthly_trends.merge(monthly_op_exp, on='MonthYear', how='outer')
+        else:
+            logger.warning("No Operating Expenses accounts found")
+            monthly_trends['Operating_Expenses'] = 0
 
-        # Gross Profit
+        # Fill NaN values
+        monthly_trends = monthly_trends.fillna(0)
+
+        # Calculate derived KPIs
+        monthly_trends['COGS_Pct_of_Revenue'] = (
+            (monthly_trends['COGS'].abs() / monthly_trends['Revenue'].abs()) * 100
+        ).fillna(0).replace([float('inf'), -float('inf')], 0)
+
+        monthly_trends['Operating_Expenses_Pct_of_Revenue'] = (
+            (monthly_trends['Operating_Expenses'].abs() / monthly_trends['Revenue'].abs()) * 100
+        ).fillna(0).replace([float('inf'), -float('inf')], 0)
+
         monthly_trends['Gross_Profit'] = monthly_trends['Revenue'] - monthly_trends['COGS']
         monthly_trends['Gross_Profit_Margin'] = (
             (monthly_trends['Gross_Profit'].abs() / monthly_trends['Revenue'].abs()) * 100
@@ -258,7 +282,10 @@ def calculate_kpis(df: pd.DataFrame) -> Optional[pd.DataFrame]:
         cash_accounts = df[df['AccountCategory'] == 'Assets']
         if not cash_accounts.empty:
             monthly_cash = cash_accounts.groupby('MonthYear')['Amount'].sum().reset_index(name='Cash_Balance')
-            monthly_trends = monthly_trends.merge(monthly_cash, on='MonthYear', how='outer').fillna(0)
+            monthly_trends = monthly_trends.merge(monthly_cash, on='MonthYear', how='outer')
+        else:
+            logger.warning("No Assets accounts found")
+            monthly_trends['Cash_Balance'] = 0
 
         # Transaction Volume
         monthly_volume = df.groupby('MonthYear').size().reset_index(name='Transaction_Volume')
@@ -307,28 +334,46 @@ def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
     st.header("Key Performance Indicators")
 
     # Revenue
-    fig_revenue = px.line(monthly_trends, x='MonthYear', y='Revenue', title='Monthly Revenue')
-    st.plotly_chart(fig_revenue, use_container_width=True)
+    if 'Revenue' in monthly_trends.columns:
+        fig_revenue = px.line(monthly_trends, x='MonthYear', y='Revenue', title='Monthly Revenue')
+        st.plotly_chart(fig_revenue, use_container_width=True)
+    else:
+        st.warning("No Revenue data available for visualization.")
 
     # Revenue Growth
-    fig_growth = px.line(monthly_trends, x='MonthYear', y='Revenue_Growth_Rate', title='Revenue Growth Rate')
-    st.plotly_chart(fig_growth, use_container_width=True)
+    if 'Revenue_Growth_Rate' in monthly_trends.columns:
+        fig_growth = px.line(monthly_trends, x='MonthYear', y='Revenue_Growth_Rate', title='Revenue Growth Rate')
+        st.plotly_chart(fig_growth, use_container_width=True)
+    else:
+        st.warning("No Revenue Growth Rate data available.")
 
     # Gross Profit Margin
-    fig_gpm = px.line(monthly_trends, x='MonthYear', y='Gross_Profit_Margin', title='Gross Profit Margin')
-    st.plotly_chart(fig_gpm, use_container_width=True)
+    if 'Gross_Profit_Margin' in monthly_trends.columns:
+        fig_gpm = px.line(monthly_trends, x='MonthYear', y='Gross_Profit_Margin', title='Gross Profit Margin')
+        st.plotly_chart(fig_gpm, use_container_width=True)
+    else:
+        st.warning("No Gross Profit Margin data available.")
 
     # Operating Expenses
-    fig_opex = px.line(monthly_trends, x='MonthYear', y='Operating_Expenses', title='Operating Expenses')
-    st.plotly_chart(fig_opex, use_container_width=True)
+    if 'Operating_Expenses' in monthly_trends.columns:
+        fig_opex = px.line(monthly_trends, x='MonthYear', y='Operating_Expenses', title='Operating Expenses')
+        st.plotly_chart(fig_opex, use_container_width=True)
+    else:
+        st.warning("No Operating Expenses data available.")
 
     # Cash Balance
-    fig_cash = px.line(monthly_trends, x='MonthYear', y='Cash_Balance', title='Cash Balance')
-    st.plotly_chart(fig_cash, use_container_width=True)
+    if 'Cash_Balance' in monthly_trends.columns:
+        fig_cash = px.line(monthly_trends, x='MonthYear', y='Cash_Balance', title='Cash Balance')
+        st.plotly_chart(fig_cash, use_container_width=True)
+    else:
+        st.warning("No Cash Balance data available.")
 
     # Transaction Volume
-    fig_volume = px.line(monthly_trends, x='MonthYear', y='Transaction_Volume', title='Transaction Volume')
-    st.plotly_chart(fig_volume, use_container_width=True)
+    if 'Transaction_Volume' in monthly_trends.columns:
+        fig_volume = px.line(monthly_trends, x='MonthYear', y='Transaction_Volume', title='Transaction Volume')
+        st.plotly_chart(fig_volume, use_container_width=True)
+    else:
+        st.warning("No Transaction Volume data available.")
 
     # Revenue by Category
     st.header("Revenue by Account Category")
@@ -346,6 +391,8 @@ def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
             barmode='group',
         )
         st.plotly_chart(fig_revenue_cat, use_container_width=True)
+    else:
+        st.warning("No categorized revenue data available for visualization.")
 
 def main():
     """Main function to run the Streamlit app."""
