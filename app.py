@@ -9,7 +9,6 @@ import logging
 from typing import Optional, List, Dict
 import asyncio
 import aiohttp
-from functools import lru_cache
 
 # --- Configuration ---
 
@@ -69,56 +68,64 @@ async def fetch_batch(session: aiohttp.ClientSession, url: str, retries: int = R
     logger.error(f"Failed to fetch {url} after {retries} attempts")
     return None
 
+async def fetch_all_batches(api_url_base: str, page_size: int) -> List[Dict]:
+    """Async function to fetch all journal batches."""
+    all_batches = []
+    skip = 0
+
+    async with aiohttp.ClientSession() as session:
+        # Get total count
+        count_url = f"{api_url_base}?$top=1&$skip=0&$count=true"
+        count_data = await fetch_batch(session, count_url)
+        if not count_data:
+            st.error("Failed to fetch total count from API.")
+            return all_batches
+        total_count = count_data.get('@odata.count', 0)
+        logger.info(f"Total journal batches: {total_count}")
+
+        # Progress bar
+        progress_bar = st.progress(0)
+        progress_text = st.empty()
+
+        while skip < total_count:
+            paginated_url = f"{api_url_base}?$top={page_size}&$skip={skip}"
+            data = await fetch_batch(session, paginated_url)
+            if not data or not data.get('value'):
+                logger.warning("No more data returned by API.")
+                break
+            all_batches.extend(data['value'])
+            skip += page_size
+
+            # Update progress
+            progress_percent = min(100, int((skip / total_count) * 100))
+            progress_bar.progress(progress_percent)
+            progress_text.text(f"Fetching data: {progress_percent}%")
+
+        progress_text.text("Data fetch complete!")
+        time.sleep(1)
+        progress_bar.empty()
+        st.success(f"Fetched {len(all_batches)} journal batches.")
+
+    return all_batches
+
 @st.cache_data(show_spinner=False, ttl=3600)
 def fetch_data_from_api() -> Optional[List[Dict]]:
-    """Fetch all journal batches from the API with async pagination."""
+    """Fetch all journal batches from the API with async pagination, wrapped for Streamlit caching."""
     api_url_base = setup_secrets()
     if not api_url_base:
         return None
 
-    all_batches = []
-    skip = 0
-
     try:
-        # Get total count
-        async with aiohttp.ClientSession() as session:
-            count_url = f"{api_url_base}?$top=1&$skip=0&$count=true"
-            count_data = await fetch_batch(session, count_url)
-            if not count_data:
-                st.error("Failed to fetch total count from API.")
-                return None
-            total_count = count_data.get('@odata.count', 0)
-            logger.info(f"Total journal batches: {total_count}")
-
-            # Progress bar
-            progress_bar = st.progress(0)
-            progress_text = st.empty()
-
-            while skip < total_count:
-                paginated_url = f"{api_url_base}?$top={PAGE_SIZE}&$skip={skip}"
-                data = await fetch_batch(session, paginated_url)
-                if not data or not data.get('value'):
-                    logger.warning("No more data returned by API.")
-                    break
-                all_batches.extend(data['value'])
-                skip += PAGE_SIZE
-
-                # Update progress
-                progress_percent = min(100, int((skip / total_count) * 100))
-                progress_bar.progress(progress_percent)
-                progress_text.text(f"Fetching data: {progress_percent}%")
-
-            progress_text.text("Data fetch complete!")
-            time.sleep(1)
-            progress_bar.empty()
-            st.success(f"Fetched {len(all_batches)} journal batches.")
-
+        # Run async fetching in a synchronous context
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        all_batches = loop.run_until_complete(fetch_all_batches(api_url_base, PAGE_SIZE))
+        loop.close()
+        return all_batches
     except Exception as e:
         logger.error(f"Unexpected error in fetch_data_from_api: {e}")
         st.error("An error occurred while fetching data. Please try again later.")
         return None
-
-    return all_batches
 
 @st.cache_data(show_spinner=False, ttl=3600)
 def process_data(all_batches: List[Dict]) -> Optional[pd.DataFrame]:
@@ -273,11 +280,13 @@ def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
 
     # Filters
     st.sidebar.header("Filters")
+    min_date = df['JournalDate'].min().date() if not pd.isna(df['JournalDate'].min()) else datetime.date.today()
+    max_date = df['JournalDate'].max().date() if not pd.isna(df['JournalDate'].max()) else datetime.date.today()
     date_range = st.sidebar.date_input(
         "Select Date Range",
-        [df['JournalDate'].min(), df['JournalDate'].max()],
-        min_value=df['JournalDate'].min(),
-        max_value=df['JournalDate'].max(),
+        [min_date, max_date],
+        min_value=min_date,
+        max_value=max_date,
     )
     account_categories = st.sidebar.multiselect(
         "Account Categories", options=df['AccountCategory'].unique(), default=df['AccountCategory'].unique()
@@ -285,8 +294,8 @@ def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
 
     # Filter DataFrame
     filtered_df = df[
-        (df['JournalDate'].dt.date >= date_range[0]) &
-        (df['JournalDate'].dt.date <= date_range[1]) &
+        (df['JournalDate'].dt.date >= pd.Timestamp(date_range[0]).date()) &
+        (df['JournalDate'].dt.date <= pd.Timestamp(date_range[1]).date()) &
         (df['AccountCategory'].isin(account_categories))
     ]
 
