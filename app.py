@@ -345,6 +345,10 @@ def process_data(all_batches: List[Dict]) -> Optional[pd.DataFrame]:
             st.error("Error: JournalDate column missing. Cannot process data.")
             return None
 
+        # Pre-aggregate for performance
+        monthly_category_totals = df.groupby(['MonthYear', 'AccountCategory'])['Amount'].sum().reset_index()
+        st.session_state['monthly_category_totals'] = monthly_category_totals
+
         # Log category distribution
         if 'AccountCategory' in df.columns:
             category_counts = df['AccountCategory'].value_counts().to_dict()
@@ -377,11 +381,13 @@ def calculate_kpis(df: pd.DataFrame) -> Optional[pd.DataFrame]:
             monthly_revenue['Revenue_Growth_Rate'] = (
                 (monthly_revenue['Revenue'] - monthly_revenue['Revenue_Lag']) / monthly_revenue['Revenue_Lag'] * 100
             ).fillna(0).replace([float('inf'), -float('inf')], 0)
+            monthly_revenue['Revenue_Change_Pct'] = monthly_revenue['Revenue'].pct_change() * 100
             monthly_trends = monthly_trends.merge(monthly_revenue, on='MonthYear', how='outer')
         else:
             logger.warning("No Revenue accounts found in data")
             monthly_trends['Revenue'] = 0
             monthly_trends['Revenue_Growth_Rate'] = 0
+            monthly_trends['Revenue_Change_Pct'] = 0
             st.warning("No Revenue accounts found. Revenue KPIs may be incomplete. Check account numbers starting with '4'.")
 
         # COGS Trends
@@ -428,6 +434,9 @@ def calculate_kpis(df: pd.DataFrame) -> Optional[pd.DataFrame]:
             (monthly_trends['Gross_Profit'].abs() / monthly_trends['Revenue'].abs()) * 100
         ).fillna(0).replace([float('inf'), -float('inf')], 0)
 
+        # Net Profit
+        monthly_trends['Net_Profit'] = monthly_trends['Revenue'] - monthly_trends['COGS'] - monthly_trends['Operating_Expenses']
+
         # Transaction Volume
         monthly_volume = df.groupby('MonthYear').size().reset_index(name='Transaction_Volume')
         monthly_trends = monthly_trends.merge(monthly_volume, on='MonthYear', how='outer').fillna(0)
@@ -441,7 +450,7 @@ def calculate_kpis(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
     """Render the Streamlit dashboard."""
     # Center the logo using columns
-    col1, col2, col3 = st.columns([1, 2, 1])  # Adjust ratios to control width
+    col1, col2, col3 = st.columns([1, 2, 1])
     with col2:
         try:
             st.image(
@@ -452,6 +461,25 @@ def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
             logger.error("Logo file not found at assets/ie_networks_logo.png")
             st.warning("Logo not found. Please ensure 'ie_networks_logo.png' is in the assets folder.")
     st.title("IE Networks CEO Dashboard")
+
+    # KPI Cards
+    st.header("At-a-Glance Metrics")
+    cols = st.columns(4)
+    with cols[0]:
+        st.metric("Total Revenue", f"${monthly_trends['Revenue'].sum():,.2f}")
+    with cols[1]:
+        st.metric("Cash Balance", f"${monthly_trends['Cash_Balance'].sum():,.2f}")
+    with cols[2]:
+        st.metric("Gross Profit Margin", f"{monthly_trends['Gross_Profit_Margin'].mean():.1f}%")
+    with cols[3]:
+        st.metric("Net Profit", f"${monthly_trends['Net_Profit'].sum():,.2f}")
+
+    # Alerts
+    if 'Revenue_Change_Pct' in monthly_trends.columns:
+        alerts = monthly_trends[monthly_trends['Revenue_Change_Pct'].abs() > 20]
+        if not alerts.empty:
+            st.error("Revenue Alerts: Significant changes detected!")
+            st.dataframe(alerts[['MonthYear', 'Revenue_Change_Pct']].style.format({'Revenue_Change_Pct': '{:.2f}%'}))
 
     # Filters
     st.sidebar.header("Filters")
@@ -473,6 +501,19 @@ def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
         (df['JournalDate'].dt.date <= pd.Timestamp(date_range[1]).date()) &
         (df['AccountCategory'].isin(account_categories))
     ]
+
+    # Top Accounts Drill-Down
+    if account_categories:
+        st.subheader("Top Accounts by Category")
+        for category in account_categories:
+            cat_data = filtered_df[filtered_df['AccountCategory'] == category]
+            if not cat_data.empty:
+                top_accounts = cat_data.groupby(['AccountNumber', 'AccountDescription'])['Amount'].sum().nlargest(5).reset_index()
+                st.write(f"Top 5 {category} Accounts")
+                st.dataframe(top_accounts.style.format({'Amount': '${:,.2f}'}), use_container_width=True)
+                # Download button
+                csv = cat_data.to_csv(index=False)
+                st.download_button(f"Download {category} Transactions", csv, f"{category}_transactions.csv")
 
     # Display Data
     st.subheader("Transaction Data")
@@ -516,6 +557,13 @@ def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
     else:
         st.warning("No Cash Balance data available.")
 
+    # Net Profit
+    if 'Net_Profit' in monthly_trends.columns and monthly_trends['Net_Profit'].sum() != 0:
+        fig_net_profit = px.line(monthly_trends, x='MonthYear', y='Net_Profit', title='Net Profit')
+        st.plotly_chart(fig_net_profit, use_container_width=True)
+    else:
+        st.warning("No Net Profit data available.")
+
     # Transaction Volume
     if 'Transaction_Volume' in monthly_trends.columns and monthly_trends['Transaction_Volume'].sum() != 0:
         fig_volume = px.line(monthly_trends, x='MonthYear', y='Transaction_Volume', title='Transaction Volume')
@@ -542,7 +590,7 @@ def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
     else:
         st.warning("No categorized revenue data available for visualization.")
 
-    # Additional Visualization: Expenses by Category
+    # Expenses by Category
     st.header("Expenses by Account Category")
     expense_categories = ['Cost of Goods Sold', 'Operating Expenses']
     expense_data = filtered_df[filtered_df['AccountCategory'].isin(expense_categories)]
