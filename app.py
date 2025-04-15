@@ -8,6 +8,7 @@ import logging
 from typing import Optional, List, Dict
 import asyncio
 import aiohttp
+import os
 
 # --- Configuration ---
 
@@ -22,30 +23,94 @@ RETRY_ATTEMPTS = 3
 RETRY_DELAY = 2  # seconds
 TIMEOUT = 30  # seconds
 
-# Account Category Mapping
-ACCOUNT_CATEGORY_MAPPING = {
-    '11000001001': 'Assets',
-    '12000002007': 'Assets',
-    '13000001001': 'Assets',
-    '21000001001': 'Liabilities',
-    '61000001001': 'Operating Expenses',
-    '61000003001': 'Operating Expenses',
-    '61000006011': 'Operating Expenses',
-    '61000008001': 'Operating Expenses',
-    '61000017001': 'Operating Expenses',
-    '61000018001': 'Operating Expenses',
-    '61000019001': 'Operating Expenses',
-    '61000022001': 'Operating Expenses',
-    '61000025001': 'Operating Expenses',
-    '61000026001': 'Operating Expenses',
-    '61000027001': 'Operating Expenses',
-    '51000002002': 'Cost of Goods Sold',
-    '51000002003': 'Cost of Goods Sold',
-    '51000005002': 'Cost of Goods Sold',
-    '51000007005': 'Operating Expenses',
-    '61000002001': 'Operating Expenses',
-    '61000004001': 'Operating Expenses',
-    '61000006015': 'Operating Expenses',
+# Get the directory of the current script
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+# Load unique_accounts.csv
+try:
+    unique_accounts = pd.read_csv(os.path.join(BASE_DIR, 'unique_accounts.csv'))
+    logger.info("Loaded unique_accounts.csv successfully")
+except FileNotFoundError:
+    logger.error("unique_accounts.csv not found")
+    st.error("Error: unique_accounts.csv not found. Please ensure the file is included in the app directory.")
+    unique_accounts = pd.DataFrame(columns=['AccountNumber', 'AccountDescription'])
+except Exception as e:
+    logger.error(f"Failed to load unique_accounts.csv: {e}")
+    st.error(f"Error loading unique_accounts.csv: {e}")
+    unique_accounts = pd.DataFrame(columns=['AccountNumber', 'AccountDescription'])
+
+# Categorization function
+def categorize_account(account_number: str, description: str) -> str:
+    """
+    Categorize an account based on AccountNumber prefix and AccountDescription.
+    
+    Parameters:
+    - account_number: The account number as a string.
+    - description: The account description as a string.
+    
+    Returns:
+    - The category of the account (e.g., 'Assets - Cash', 'Operating Expenses').
+    """
+    description = description.upper().strip() if description else ''
+    account_number = str(account_number).strip() if account_number else ''
+    
+    # Handle invalid account numbers
+    if not account_number or not any(c.isdigit() for c in account_number):
+        return 'Uncategorized'
+    
+    # Get the first one or two digits
+    prefix = account_number[:2] if len(account_number) >= 2 else account_number[:1]
+    
+    # Prefix-based categorization
+    if prefix.startswith('11'):
+        return 'Assets - Cash'
+    elif prefix.startswith('12'):
+        return 'Assets - Accounts Receivable'
+    elif prefix.startswith('14'):
+        return 'Assets - Prepaid Expenses'
+    elif prefix.startswith('16'):
+        return 'Assets - Goods in Transit'
+    elif prefix == '17':
+        if 'FIXED ASSET' in description:
+            return 'Fixed Assets'
+        elif 'ACCU. DEP.' in description:
+            return 'Accumulated Depreciation'
+        return 'Fixed Assets'
+    elif prefix.startswith('1'):
+        return 'Assets - Other'
+    elif prefix.startswith('21'):
+        return 'Liabilities - Accounts Payable'
+    elif prefix.startswith('22'):
+        return 'Liabilities - Loans'
+    elif prefix.startswith('24'):
+        return 'Liabilities - Other Accrued'
+    elif prefix.startswith('2'):
+        return 'Liabilities - Other'
+    elif prefix.startswith('3'):
+        return 'Equity'
+    elif prefix.startswith('4'):
+        return 'Revenue'
+    elif prefix.startswith('5'):
+        if any(keyword in description for keyword in [
+            'MATERIAL', 'LABOUR', 'SUBCONTRACT', 'FREIGHT', 'CUSTOM CLEARANCE'
+        ]):
+            return 'Cost of Goods Sold'
+        elif any(keyword in description for keyword in [
+            'BANK SERVICE', 'TRAINING', 'LICENSE', 'INSURANCE', 'PERFORMANCE GUARANTEE', 
+            'SUPPORT', 'BID BOND', 'ADVANCE GUARANTEE'
+        ]):
+            return 'Operating Expenses'
+        return 'Operating Expenses'
+    elif prefix.startswith('6'):
+        return 'Operating Expenses'
+    else:
+        return 'Uncategorized'
+
+# Manual overrides for specific accounts
+manual_overrides = {
+    '51000007005': 'Operating Expenses',  # COST OF BANK SERVICE CHARGE CBE VDI
+    '51000108012': 'Cost of Goods Sold',  # COST OF-EPSS Networking Infra& Modula- FOREIGN...
+    '1700': 'Fixed Assets'  # Total Fixed Asset (PPE)
 }
 
 # --- Utility Functions ---
@@ -99,7 +164,6 @@ async def fetch_all_batches(api_url_base: str, page_size: int, auth: Optional[tu
     skip = 0
 
     async with aiohttp.ClientSession() as session:
-        # Get total count
         count_url = f"{api_url_base}?$top=1&$skip=0&$count=true"
         count_data = await fetch_batch(session, count_url, auth, headers)
         if not count_data:
@@ -108,7 +172,6 @@ async def fetch_all_batches(api_url_base: str, page_size: int, auth: Optional[tu
         total_count = count_data.get('@odata.count', 0)
         logger.info(f"Total journal batches: {total_count}")
 
-        # Progress bar
         progress_bar = st.progress(0)
         progress_text = st.empty()
 
@@ -121,7 +184,6 @@ async def fetch_all_batches(api_url_base: str, page_size: int, auth: Optional[tu
             all_batches.extend(data['value'])
             skip += page_size
 
-            # Update progress
             progress_percent = min(100, int((skip / total_count) * 100))
             progress_bar.progress(progress_percent)
             progress_text.text(f"Fetching data: {progress_percent}%")
@@ -160,7 +222,6 @@ def fetch_data_from_api() -> Optional[List[Dict]]:
         headers["Authorization"] = f"Bearer {secrets['api_token']}"
 
     try:
-        # Run async fetching in a synchronous context
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         all_batches = loop.run_until_complete(
@@ -168,7 +229,6 @@ def fetch_data_from_api() -> Optional[List[Dict]]:
         )
         loop.close()
         if all_batches:
-            # Cache the data
             try:
                 with open('cached_data.json', 'w') as f:
                     json.dump(all_batches, f)
@@ -216,27 +276,31 @@ def process_data(all_batches: List[Dict]) -> Optional[pd.DataFrame]:
 
                 for detail in header.get('JournalDetails', []):
                     account_number = detail.get('AccountNumber')
-                    account_category = ACCOUNT_CATEGORY_MAPPING.get(account_number, 'Uncategorized')
-                    if account_category == 'Uncategorized':
-                        missing_mappings.add(f"{account_number}: {detail.get('AcctDescription', '')}")
+                    account_description = detail.get('AcctDescription', '')
+                    
+                    # Categorize account
+                    category = manual_overrides.get(account_number, categorize_account(account_number, account_description))
+                    
+                    if category == 'Uncategorized':
+                        missing_mappings.add(f"{account_number}: {account_description}")
 
                     transaction = {
                         **batch_info,
                         **header_info,
                         'TransactionNumber': detail.get('TransactionNumber'),
                         'AccountNumber': account_number,
-                        'AccountDescription': detail.get('AcctDescription'),
+                        'AccountDescription': account_description,
                         'Amount': detail.get('Amount'),
                         'JournalDate': detail.get('JournalDate'),
                         'TransactionDescription': detail.get('Description'),
                         'Reference': detail.get('Reference'),
                         'HomeCurrency': detail.get('HomeCurrency'),
-                        'AccountCategory': account_category,
+                        'AccountCategory': category,
                     }
                     processed_transactions.append(transaction)
 
         if missing_mappings:
-            logger.warning(f"Missing account mappings for: {missing_mappings}")
+            logger.warning(f"Uncategorized accounts: {missing_mappings}")
             st.warning(f"Some accounts are uncategorized: {len(missing_mappings)} unique accounts. Check app.log for details.")
 
         df = pd.DataFrame(processed_transactions)
@@ -276,7 +340,6 @@ def calculate_kpis(df: pd.DataFrame) -> Optional[pd.DataFrame]:
         return None
 
     with st.spinner("Calculating KPIs..."):
-        # Initialize monthly_trends with MonthYear from all transactions
         if 'MonthYear' in df.columns:
             monthly_trends = pd.DataFrame(df['MonthYear'].unique(), columns=['MonthYear'])
         else:
@@ -317,6 +380,15 @@ def calculate_kpis(df: pd.DataFrame) -> Optional[pd.DataFrame]:
             logger.warning("No Operating Expenses accounts found")
             monthly_trends['Operating_Expenses'] = 0
 
+        # Cash Balance
+        cash_accounts = df[df['AccountCategory'].str.startswith('Assets - Cash')]
+        if not cash_accounts.empty:
+            monthly_cash = cash_accounts.groupby('MonthYear')['Amount'].sum().reset_index(name='Cash_Balance')
+            monthly_trends = monthly_trends.merge(monthly_cash, on='MonthYear', how='outer')
+        else:
+            logger.warning("No Assets - Cash accounts found")
+            monthly_trends['Cash_Balance'] = 0
+
         # Fill NaN values
         monthly_trends = monthly_trends.fillna(0)
 
@@ -333,15 +405,6 @@ def calculate_kpis(df: pd.DataFrame) -> Optional[pd.DataFrame]:
         monthly_trends['Gross_Profit_Margin'] = (
             (monthly_trends['Gross_Profit'].abs() / monthly_trends['Revenue'].abs()) * 100
         ).fillna(0).replace([float('inf'), -float('inf')], 0)
-
-        # Cash Balance
-        cash_accounts = df[df['AccountCategory'] == 'Assets']
-        if not cash_accounts.empty:
-            monthly_cash = cash_accounts.groupby('MonthYear')['Amount'].sum().reset_index(name='Cash_Balance')
-            monthly_trends = monthly_trends.merge(monthly_cash, on='MonthYear', how='outer')
-        else:
-            logger.warning("No Assets accounts found")
-            monthly_trends['Cash_Balance'] = 0
 
         # Transaction Volume
         monthly_volume = df.groupby('MonthYear').size().reset_index(name='Transaction_Volume')
@@ -372,7 +435,7 @@ def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
         max_value=max_date,
     )
     account_categories = st.sidebar.multiselect(
-        "Account Categories", options=df['AccountCategory'].unique(), default=df['AccountCategory'].unique()
+        "Account Categories", options=sorted(df['AccountCategory'].unique()), default=df['AccountCategory'].unique()
     )
 
     # Filter DataFrame
@@ -433,7 +496,7 @@ def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
 
     # Revenue by Category
     st.header("Revenue by Account Category")
-    revenue_category = filtered_df[filtered_df['AccountCategory'] != 'Uncategorized']
+    revenue_category = filtered_df[filtered_df['AccountCategory'] == 'Revenue']
     if not revenue_category.empty:
         revenue_category_monthly = (
             revenue_category.groupby(['MonthYear', 'AccountCategory'])['Amount'].sum().reset_index()
@@ -449,6 +512,26 @@ def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
         st.plotly_chart(fig_revenue_cat, use_container_width=True)
     else:
         st.warning("No categorized revenue data available for visualization.")
+
+    # Additional Visualization: Expenses by Category
+    st.header("Expenses by Account Category")
+    expense_categories = ['Cost of Goods Sold', 'Operating Expenses']
+    expense_data = filtered_df[filtered_df['AccountCategory'].isin(expense_categories)]
+    if not expense_data.empty:
+        expense_category_monthly = (
+            expense_data.groupby(['MonthYear', 'AccountCategory'])['Amount'].sum().reset_index()
+        )
+        fig_expense_cat = px.bar(
+            expense_category_monthly,
+            x='MonthYear',
+            y='Amount',
+            color='AccountCategory',
+            title='Monthly Expenses by Account Category',
+            barmode='stack',
+        )
+        st.plotly_chart(fig_expense_cat, use_container_width=True)
+    else:
+        st.warning("No categorized expense data available for visualization.")
 
 def main():
     """Main function to run the Streamlit app."""
