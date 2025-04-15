@@ -24,15 +24,16 @@ RETRY_DELAY = 2  # seconds
 TIMEOUT = 30  # seconds
 
 # Account Category Mapping
+# Account Category Mapping
 ACCOUNT_CATEGORY_MAPPING = {
     '11000001001': 'Assets',
+    '12000002007': 'Assets',
+    '13000001001': 'Assets',
+    '21000001001': 'Liabilities',
+    '61000001001': 'Operating Expenses',
     '61000003001': 'Operating Expenses',
     '61000006011': 'Operating Expenses',
-    '12000002007': 'Assets',
-    '21000001001': 'Liabilities',
     '61000008001': 'Operating Expenses',
-    '13000001001': 'Assets',
-    '61000001001': 'Operating Expenses',
     '61000017001': 'Operating Expenses',
     '61000018001': 'Operating Expenses',
     '61000019001': 'Operating Expenses',
@@ -40,12 +41,14 @@ ACCOUNT_CATEGORY_MAPPING = {
     '61000025001': 'Operating Expenses',
     '61000026001': 'Operating Expenses',
     '61000027001': 'Operating Expenses',
-    # Add Revenue and COGS mappings here after obtaining from Sage
-    # Example: '51000001001': 'Revenue',
-    #          '52000002001': 'Cost of Goods Sold',
-}
-
-# --- Utility Functions ---
+    '51000002002': 'Cost of Goods Sold',
+    '51000002003': 'Cost of Goods Sold',
+    '51000005002': 'Cost of Goods Sold',
+    '51000007005': 'Operating Expenses',
+    '61000002001': 'Operating Expenses',
+    '61000004001': 'Operating Expenses',
+    '61000006015': 'Operating Expenses',
+}# --- Utility Functions ---
 
 def setup_secrets() -> Optional[str]:
     """Retrieve API URL from Streamlit secrets or environment variables."""
