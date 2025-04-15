@@ -440,14 +440,17 @@ def calculate_kpis(df: pd.DataFrame) -> Optional[pd.DataFrame]:
 
 def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
     """Render the Streamlit dashboard."""
-    try:
-        st.image(
-            os.path.join(BASE_DIR, 'assets', 'ie_networks_logo.png'),
-            width=200,
-        )
-    except FileNotFoundError:
-        logger.error("Logo file not found at assets/ie_networks_logo.png")
-        st.warning("Logo not found. Please ensure 'ie_networks_logo.png' is in the assets folder.")
+    # Center the logo using columns
+    col1, col2, col3 = st.columns([1, 2, 1])  # Adjust ratios to control width
+    with col2:
+        try:
+            st.image(
+                os.path.join(BASE_DIR, 'assets', 'ie_networks_logo.png'),
+                width=200,
+            )
+        except FileNotFoundError:
+            logger.error("Logo file not found at assets/ie_networks_logo.png")
+            st.warning("Logo not found. Please ensure 'ie_networks_logo.png' is in the assets folder.")
     st.title("IE Networks CEO Dashboard")
 
     # Filters
