@@ -29,7 +29,7 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))
 # Load unique_accounts.csv
 try:
     unique_accounts = pd.read_csv(os.path.join(BASE_DIR, 'unique_accounts.csv'))
-    logger.info("Loaded unique_accounts.csv successfully")
+    logger.info(f"Loaded unique_accounts.csv successfully with {len(unique_accounts)} accounts")
 except FileNotFoundError:
     logger.error("unique_accounts.csv not found")
     st.error("Error: unique_accounts.csv not found. Please ensure the file is included in the app directory.")
@@ -51,59 +51,65 @@ def categorize_account(account_number: str, description: str) -> str:
     Returns:
     - The category of the account (e.g., 'Assets - Cash', 'Operating Expenses').
     """
-    description = description.upper().strip() if description else ''
-    account_number = str(account_number).strip() if account_number else ''
-    
-    # Handle invalid account numbers
-    if not account_number or not any(c.isdigit() for c in account_number):
-        return 'Uncategorized'
-    
-    # Get the first one or two digits
-    prefix = account_number[:2] if len(account_number) >= 2 else account_number[:1]
-    
-    # Prefix-based categorization
-    if prefix.startswith('11'):
-        return 'Assets - Cash'
-    elif prefix.startswith('12'):
-        return 'Assets - Accounts Receivable'
-    elif prefix.startswith('14'):
-        return 'Assets - Prepaid Expenses'
-    elif prefix.startswith('16'):
-        return 'Assets - Goods in Transit'
-    elif prefix == '17':
-        if 'FIXED ASSET' in description:
+    try:
+        description = str(description).upper().strip() if description else ''
+        account_number = str(account_number).strip() if account_number else ''
+        
+        # Handle invalid account numbers
+        if not account_number or not any(c.isdigit() for c in account_number):
+            logger.debug(f"Invalid account number: {account_number}, description: {description}")
+            return 'Uncategorized'
+        
+        # Get the first one or two digits
+        prefix = account_number[:2] if len(account_number) >= 2 else account_number[:1]
+        
+        # Prefix-based categorization
+        if prefix.startswith('11'):
+            return 'Assets - Cash'
+        elif prefix.startswith('12'):
+            return 'Assets - Accounts Receivable'
+        elif prefix.startswith('14'):
+            return 'Assets - Prepaid Expenses'
+        elif prefix.startswith('16'):
+            return 'Assets - Goods in Transit'
+        elif prefix == '17':
+            if 'FIXED ASSET' in description:
+                return 'Fixed Assets'
+            elif 'ACCU. DEP.' in description:
+                return 'Accumulated Depreciation'
             return 'Fixed Assets'
-        elif 'ACCU. DEP.' in description:
-            return 'Accumulated Depreciation'
-        return 'Fixed Assets'
-    elif prefix.startswith('1'):
-        return 'Assets - Other'
-    elif prefix.startswith('21'):
-        return 'Liabilities - Accounts Payable'
-    elif prefix.startswith('22'):
-        return 'Liabilities - Loans'
-    elif prefix.startswith('24'):
-        return 'Liabilities - Other Accrued'
-    elif prefix.startswith('2'):
-        return 'Liabilities - Other'
-    elif prefix.startswith('3'):
-        return 'Equity'
-    elif prefix.startswith('4'):
-        return 'Revenue'
-    elif prefix.startswith('5'):
-        if any(keyword in description for keyword in [
-            'MATERIAL', 'LABOUR', 'SUBCONTRACT', 'FREIGHT', 'CUSTOM CLEARANCE'
-        ]):
-            return 'Cost of Goods Sold'
-        elif any(keyword in description for keyword in [
-            'BANK SERVICE', 'TRAINING', 'LICENSE', 'INSURANCE', 'PERFORMANCE GUARANTEE', 
-            'SUPPORT', 'BID BOND', 'ADVANCE GUARANTEE'
-        ]):
+        elif prefix.startswith('1'):
+            return 'Assets - Other'
+        elif prefix.startswith('21'):
+            return 'Liabilities - Accounts Payable'
+        elif prefix.startswith('22'):
+            return 'Liabilities - Loans'
+        elif prefix.startswith('24'):
+            return 'Liabilities - Other Accrued'
+        elif prefix.startswith('2'):
+            return 'Liabilities - Other'
+        elif prefix.startswith('3'):
+            return 'Equity'
+        elif prefix.startswith('4'):
+            return 'Revenue'
+        elif prefix.startswith('5'):
+            if any(keyword in description for keyword in [
+                'MATERIAL', 'LABOUR', 'SUBCONTRACT', 'FREIGHT', 'CUSTOM CLEARANCE'
+            ]):
+                return 'Cost of Goods Sold'
+            elif any(keyword in description for keyword in [
+                'BANK SERVICE', 'TRAINING', 'LICENSE', 'INSURANCE', 'PERFORMANCE GUARANTEE', 
+                'SUPPORT', 'BID BOND', 'ADVANCE GUARANTEE'
+            ]):
+                return 'Operating Expenses'
             return 'Operating Expenses'
-        return 'Operating Expenses'
-    elif prefix.startswith('6'):
-        return 'Operating Expenses'
-    else:
+        elif prefix.startswith('6'):
+            return 'Operating Expenses'
+        else:
+            logger.debug(f"Unmatched prefix for account: {account_number}, description: {description}")
+            return 'Uncategorized'
+    except Exception as e:
+        logger.error(f"Error categorizing account {account_number}: {e}")
         return 'Uncategorized'
 
 # Manual overrides for specific accounts
@@ -250,6 +256,7 @@ def process_data(all_batches: List[Dict]) -> Optional[pd.DataFrame]:
 
     processed_transactions = []
     missing_mappings = set()
+    account_prefixes = set()
 
     with st.spinner("Processing data..."):
         for batch in all_batches:
@@ -278,6 +285,11 @@ def process_data(all_batches: List[Dict]) -> Optional[pd.DataFrame]:
                     account_number = detail.get('AccountNumber')
                     account_description = detail.get('AcctDescription', '')
                     
+                    # Log account prefix for debugging
+                    if account_number:
+                        prefix = str(account_number)[:2] if len(str(account_number)) >= 2 else str(account_number)[:1]
+                        account_prefixes.add(prefix)
+                    
                     # Categorize account
                     category = manual_overrides.get(account_number, categorize_account(account_number, account_description))
                     
@@ -300,8 +312,11 @@ def process_data(all_batches: List[Dict]) -> Optional[pd.DataFrame]:
                     processed_transactions.append(transaction)
 
         if missing_mappings:
-            logger.warning(f"Uncategorized accounts: {missing_mappings}")
+            logger.warning(f"Uncategorized accounts: {list(missing_mappings)[:50]}")  # Limit to 50 for brevity
             st.warning(f"Some accounts are uncategorized: {len(missing_mappings)} unique accounts. Check app.log for details.")
+        
+        # Log unique prefixes for debugging
+        logger.info(f"Account prefixes found: {sorted(account_prefixes)}")
 
         df = pd.DataFrame(processed_transactions)
 
@@ -318,6 +333,8 @@ def process_data(all_batches: List[Dict]) -> Optional[pd.DataFrame]:
 
         # Feature engineering
         if 'JournalDate' in df.columns:
+            # Convert to timezone-naive to avoid PeriodArray warning
+            df['JournalDate'] = df['JournalDate'].dt.tz_localize(None)
             df['Year'] = df['JournalDate'].dt.year
             df['Month'] = df['JournalDate'].dt.month
             df['Quarter'] = df['JournalDate'].dt.quarter
@@ -327,6 +344,11 @@ def process_data(all_batches: List[Dict]) -> Optional[pd.DataFrame]:
             logger.error("JournalDate column missing")
             st.error("Error: JournalDate column missing. Cannot process data.")
             return None
+
+        # Log category distribution
+        if 'AccountCategory' in df.columns:
+            category_counts = df['AccountCategory'].value_counts().to_dict()
+            logger.info(f"Category distribution: {category_counts}")
 
         logger.info("Data processing complete")
         st.success("Data processing complete.")
@@ -357,10 +379,10 @@ def calculate_kpis(df: pd.DataFrame) -> Optional[pd.DataFrame]:
             ).fillna(0).replace([float('inf'), -float('inf')], 0)
             monthly_trends = monthly_trends.merge(monthly_revenue, on='MonthYear', how='outer')
         else:
-            logger.warning("No Revenue accounts found")
+            logger.warning("No Revenue accounts found in data")
             monthly_trends['Revenue'] = 0
             monthly_trends['Revenue_Growth_Rate'] = 0
-            st.warning("No Revenue accounts mapped. Revenue KPIs may be incomplete.")
+            st.warning("No Revenue accounts found. Revenue KPIs may be incomplete. Check account numbers starting with '4'.")
 
         # COGS Trends
         cogs_accounts = df[df['AccountCategory'] == 'Cost of Goods Sold']
@@ -453,42 +475,42 @@ def render_dashboard(df: pd.DataFrame, monthly_trends: pd.DataFrame):
     st.header("Key Performance Indicators")
 
     # Revenue
-    if 'Revenue' in monthly_trends.columns:
+    if 'Revenue' in monthly_trends.columns and monthly_trends['Revenue'].sum() != 0:
         fig_revenue = px.line(monthly_trends, x='MonthYear', y='Revenue', title='Monthly Revenue')
         st.plotly_chart(fig_revenue, use_container_width=True)
     else:
         st.warning("No Revenue data available for visualization.")
 
     # Revenue Growth
-    if 'Revenue_Growth_Rate' in monthly_trends.columns:
+    if 'Revenue_Growth_Rate' in monthly_trends.columns and monthly_trends['Revenue_Growth_Rate'].sum() != 0:
         fig_growth = px.line(monthly_trends, x='MonthYear', y='Revenue_Growth_Rate', title='Revenue Growth Rate')
         st.plotly_chart(fig_growth, use_container_width=True)
     else:
         st.warning("No Revenue Growth Rate data available.")
 
     # Gross Profit Margin
-    if 'Gross_Profit_Margin' in monthly_trends.columns:
+    if 'Gross_Profit_Margin' in monthly_trends.columns and monthly_trends['Gross_Profit_Margin'].sum() != 0:
         fig_gpm = px.line(monthly_trends, x='MonthYear', y='Gross_Profit_Margin', title='Gross Profit Margin')
         st.plotly_chart(fig_gpm, use_container_width=True)
     else:
         st.warning("No Gross Profit Margin data available.")
 
     # Operating Expenses
-    if 'Operating_Expenses' in monthly_trends.columns:
+    if 'Operating_Expenses' in monthly_trends.columns and monthly_trends['Operating_Expenses'].sum() != 0:
         fig_opex = px.line(monthly_trends, x='MonthYear', y='Operating_Expenses', title='Operating Expenses')
         st.plotly_chart(fig_opex, use_container_width=True)
     else:
         st.warning("No Operating Expenses data available.")
 
     # Cash Balance
-    if 'Cash_Balance' in monthly_trends.columns:
+    if 'Cash_Balance' in monthly_trends.columns and monthly_trends['Cash_Balance'].sum() != 0:
         fig_cash = px.line(monthly_trends, x='MonthYear', y='Cash_Balance', title='Cash Balance')
         st.plotly_chart(fig_cash, use_container_width=True)
     else:
         st.warning("No Cash Balance data available.")
 
     # Transaction Volume
-    if 'Transaction_Volume' in monthly_trends.columns:
+    if 'Transaction_Volume' in monthly_trends.columns and monthly_trends['Transaction_Volume'].sum() != 0:
         fig_volume = px.line(monthly_trends, x='MonthYear', y='Transaction_Volume', title='Transaction Volume')
         st.plotly_chart(fig_volume, use_container_width=True)
     else:
