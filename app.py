@@ -125,9 +125,9 @@ def setup_secrets() -> Optional[Dict]:
     """Retrieve API URL and credentials from Streamlit secrets."""
     try:
         secrets = {
-            "api_url": st.secrets.get("SAGE_API_URL", "https://ie-sage.ienetworks.co/api/Sage300WebApi/v1.0/-/IEDATA/GL/GLJournalBatches"),
-            "username": st.secrets.get("ADMIN"),
-            "password": st.secrets.get("ADMIN"),
+            "api_url": st.secrets.get("SAGE_API_URL", "http://196.188.234.230/Sage300WebApi/v1.0/-/IEDATA/GL/GLJournalBatches"),
+            "username": st.secrets.get("sage_username"),
+            "password": st.secrets.get("sage_password"),
             "api_token": st.secrets.get("sage_api_token")
         }
         if not secrets["api_url"]:
