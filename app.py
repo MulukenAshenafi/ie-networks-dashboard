@@ -125,13 +125,12 @@ def setup_secrets() -> Optional[Dict]:
     """Retrieve API URL and credentials from Streamlit secrets."""
     try:
         secrets = {
-            "api_url": st.secrets.get("SAGE_API_URL", "http://196.188.234.230/Sage300WebApi/v1.0/-/IEDATA/GL/GLJournalBatches"),
-            "username": st.secrets.get("ADMIN"),
-            "password": st.secrets.get("ADMIN"),
-            "api_token": st.secrets.get("sage_api_token")
+            "api_url": st.secrets.get("SAGE_API_URL"),
+            "username": st.secrets.get("sage_username"),
+            "password": st.secrets.get("sage_password")
         }
-        if not secrets["api_url"]:
-            raise ValueError("SAGE_API_URL is not set")
+        if not all([secrets["api_url"], secrets["username"], secrets["password"]]):
+            raise ValueError("Missing SAGE_API_URL, sage_username, or sage_password")
         logger.info("Secrets loaded successfully")
         return secrets
     except Exception as e:
@@ -139,13 +138,12 @@ def setup_secrets() -> Optional[Dict]:
         st.error(f"Configuration error: {e}. Please check secrets configuration.")
         return None
 
-async def fetch_batch(session: aiohttp.ClientSession, url: str, auth: Optional[tuple] = None, 
-                    headers: Optional[Dict] = None, retries: int = RETRY_ATTEMPTS) -> Optional[Dict]:
+async def fetch_batch(session: aiohttp.ClientSession, url: str, auth: Optional[aiohttp.BasicAuth] = None, 
+                    retries: int = RETRY_ATTEMPTS) -> Optional[Dict]:
     """Fetch a single batch from the API with retry logic."""
-    headers = headers or {}
     for attempt in range(retries):
         try:
-            async with session.get(url, auth=auth, headers=headers, timeout=TIMEOUT) as response:
+            async with session.get(url, auth=auth, timeout=TIMEOUT) as response:
                 response.raise_for_status()
                 data = await response.json()
                 logger.debug(f"Fetched batch from {url}")
@@ -155,7 +153,7 @@ async def fetch_batch(session: aiohttp.ClientSession, url: str, auth: Optional[t
             if e.status in (401, 403):
                 st.error(f"Authentication error: Invalid credentials (HTTP {e.status})")
                 return None
-        except (aiohttp.ClientError, json.JSONDecodeError) as e:
+        except aiohttp.ClientError as e:
             logger.warning(f"Attempt {attempt + 1} failed for {url}: {e}")
         if attempt < retries - 1:
             await asyncio.sleep(RETRY_DELAY)
@@ -163,15 +161,14 @@ async def fetch_batch(session: aiohttp.ClientSession, url: str, auth: Optional[t
     st.error(f"Failed to fetch data from {url} after {retries} attempts")
     return None
 
-async def fetch_all_batches(api_url_base: str, page_size: int, auth: Optional[tuple], 
-                          headers: Optional[Dict]) -> List[Dict]:
+async def fetch_all_batches(api_url_base: str, page_size: int, auth: Optional[aiohttp.BasicAuth]) -> List[Dict]:
     """Async function to fetch all journal batches."""
     all_batches = []
     skip = 0
 
     async with aiohttp.ClientSession() as session:
         count_url = f"{api_url_base}?$top=1&$skip=0&$count=true"
-        count_data = await fetch_batch(session, count_url, auth, headers)
+        count_data = await fetch_batch(session, count_url, auth)
         if not count_data:
             st.error("Failed to fetch total count from API.")
             return all_batches
@@ -183,7 +180,7 @@ async def fetch_all_batches(api_url_base: str, page_size: int, auth: Optional[tu
 
         while skip < total_count:
             paginated_url = f"{api_url_base}?$top={page_size}&$skip={skip}"
-            data = await fetch_batch(session, paginated_url, auth, headers)
+            data = await fetch_batch(session, paginated_url, auth)
             if not data or not data.get('value'):
                 logger.warning("No more data returned by API.")
                 break
@@ -220,18 +217,12 @@ def fetch_data_from_api() -> Optional[List[Dict]]:
     if not secrets:
         return load_cached_data()
 
-    auth = None
-    headers = {}
-    if secrets["username"] and secrets["password"]:
-        auth = aiohttp.BasicAuth(secrets["username"], secrets["password"])
-    elif secrets["api_token"]:
-        headers["Authorization"] = f"Bearer {secrets['api_token']}"
-
+    auth = aiohttp.BasicAuth(secrets["username"], secrets["password"])
     try:
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
         all_batches = loop.run_until_complete(
-            fetch_all_batches(secrets["api_url"], PAGE_SIZE, auth, headers)
+            fetch_all_batches(secrets["api_url"], PAGE_SIZE, auth)
         )
         loop.close()
         if all_batches:
